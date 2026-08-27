@@ -75,21 +75,23 @@ Times are the best of three measured runs after a warm-up, on identical
 
 | Kernel | Mojo | scikit-rf | Speedup |
 |---|---:|---:|---:|
-| `s2z`, 300k x 2-port | 42.42 ms | 2205.91 ms | 52.01x |
-| `s2t`, 10k x 2-port | 0.56 ms | 162.57 ms | 288.38x |
-| `s2a`, 300k x 2-port | 20.69 ms | 272.30 ms | 13.16x |
-| `s2z`, 20k x 4-port | 10.15 ms | 408.45 ms | 40.23x |
-| `passivity`, 10k x 4-port | 2.32 ms | 49.28 ms | 21.27x |
-| `innerconnect_s`, 20k x 6-port | 3.39 ms | 8.31 ms | 2.45x |
-| `innerconnect_s`, 80k x 6-port | 18.20 ms | 97.62 ms | 5.36x |
-| `innerconnect_s`, 150k x 6-port | 39.47 ms | 269.58 ms | 6.83x |
+| `s2z`, 300k x 2-port | 32.24 ms | 1742.32 ms | 54.04x |
+| `s2t`, 10k x 2-port | 0.65 ms | 84.70 ms | 130.89x |
+| `s2a`, 300k x 2-port | 11.42 ms | 168.19 ms | 14.73x |
+| `s2z`, 20k x 4-port | 9.43 ms | 383.65 ms | 40.68x |
+| `passivity`, 10k x 4-port | 2.31 ms | 50.87 ms | 22.03x |
+| `innerconnect_s`, 20k x 6-port | 1.32 ms | 7.35 ms | 5.56x |
+| `innerconnect_s`, 80k x 6-port | 11.43 ms | 69.26 ms | 6.06x |
+| `innerconnect_s`, 150k x 6-port | 18.07 ms | 171.08 ms | 9.47x |
 
 These results are specific to the machine and versions above. In particular,
 scikit-rf 2.0.1 performs some transforms frequency-by-frequency in Python;
 that overhead is reflected in the `s2t` and `passivity` rows.
 
-No GPU path is included. These kernels operate directly on CPU-resident NumPy
-buffers; this project has not benchmarked or validated a GPU implementation.
+No GPU path is included. The covered kernels operate on small matrices and
+have less than roughly two floating-point operations per byte moved. Copying
+CPU-resident NumPy buffers to a GPU would therefore add transfer overhead to
+memory-bound work rather than accelerate it.
 
 ## How it works
 
@@ -102,9 +104,9 @@ NumPy `complex128` already uses the memory layout expected by the kernels:
 interleaved 64-bit real and imaginary values in row-major order. Mojo performs
 batched complex matrix conversion, pivoted Gauss-Jordan solves, block transfer
 transforms, and connection updates directly in caller-owned output and scratch
-buffers. The connection update uses SIMD for contiguous complex row segments,
-including a scalar remainder, and splits batches of at least 131,072 frequency
-points between two CPU workers. Smaller batches stay serial to avoid thread
-launch overhead. No allocation or ownership crosses the FFI boundary. A
-singular two-port connection uses the same NumPy least-squares fallback as
-scikit-rf.
+buffers. The connection update factors its 2x2 inverse once per frequency and
+uses SIMD for contiguous complex row segments, including a scalar remainder.
+Batches of at least 16,384 frequency points are divided into four contiguous,
+zero-copy slices processed by persistent CPU workers; smaller batches stay
+serial. No allocation or ownership crosses the FFI boundary. A singular
+two-port connection uses the same NumPy least-squares fallback as scikit-rf.

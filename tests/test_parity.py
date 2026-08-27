@@ -3,6 +3,7 @@ import pytest
 import skrf.network as reference
 
 import mojoskrf as rf
+import mojoskrf.network as implementation
 
 rng = np.random.default_rng(2026)
 
@@ -149,19 +150,19 @@ def test_innerconnect_s_matches_upstream(ports):
 
 
 @pytest.mark.parametrize(
-    "nports,ports",
+    "nfreqs,nports,ports",
     [
-        (6, (0, 5)),
-        (7, (1, 5)),
+        (16, 6, (0, 5)),
+        (17, 7, (1, 5)),
     ],
 )
-def test_innerconnect_s_simd_blocks_and_scalar_tails(nports, ports):
-    s = random_s(nfreqs=17, nports=nports)
+def test_innerconnect_s_simd_blocks_and_scalar_tails(nfreqs, nports, ports):
+    s = random_s(nfreqs=nfreqs, nports=nports)
     k, l = ports
     assert_parity(rf.innerconnect_s(s, k, l), reference.innerconnect_s(s, k, l))
 
 
-@pytest.mark.parametrize("nfreqs", [131_071, 131_072])
+@pytest.mark.parametrize("nfreqs", [16_383, 16_384])
 def test_innerconnect_s_parallel_threshold(nfreqs):
     s = random_s(nfreqs=nfreqs, nports=3, scale=0.05)
     assert_parity(
@@ -170,7 +171,8 @@ def test_innerconnect_s_parallel_threshold(nfreqs):
     )
 
 
-def test_innerconnect_s_singular_fallback_matches_upstream_lstsq():
+def test_innerconnect_s_singular_fallback_matches_upstream_lstsq(monkeypatch):
+    monkeypatch.setattr(implementation, "INNERCONNECT_PARALLEL_THRESHOLD", 1)
     s = np.zeros((3, 4, 4), dtype=np.complex128)
     s[:, 0, 1] = 1
     s[:, 1, 0] = 1

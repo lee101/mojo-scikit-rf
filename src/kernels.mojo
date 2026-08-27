@@ -5,9 +5,7 @@ buffer, including scratch space.
 """
 
 from std.math import sqrt
-from std.runtime import initialize_runtime
 from std.sys.info import simd_width_of as simdwidthof
-from max.algorithm import parallelize
 
 comptime Ptr = UnsafePointer[Float64, AnyOrigin[mut=True]]
 
@@ -61,6 +59,7 @@ def abs2(a: C) -> Float64:
     return a.re * a.re + a.im * a.im
 
 
+@always_inline
 def innerconnect_segment(
     a: Ptr, dst: Ptr, b: Int, ob: Int, n: Int, m: Int, i: Int,
     oi: Int, j_start: Int, oj_start: Int, count: Int, pk: Int, pl: Int,
@@ -92,9 +91,10 @@ def innerconnect_segment(
         j += 1
 
 
+@always_inline
 def innerconnect_frequency(
     a: Ptr, dst: Ptr, f: Int, n: Int, pk: Int, pl: Int,
-):
+) -> Bool:
     var m = n - 2
     var b = f * n * n
     var ob = f * m * m
@@ -103,7 +103,13 @@ def innerconnect_frequency(
     var akk = load(a, b + pk * n + pk)
     var allv = load(a, b + pl * n + pl)
     var det = sub(mul(akl, alk), mul(akk, allv))
+    if abs2(det) < 1e-24:
+        return False
     var inv_det = div(C(1.0, 0.0), det)
+    var c00 = mul(allv, inv_det)
+    var c01 = mul(alk, inv_det)
+    var c10 = mul(akl, inv_det)
+    var c11 = mul(akk, inv_det)
     var lo = min(pk, pl)
     var hi = max(pk, pl)
     var oi = 0
@@ -112,8 +118,8 @@ def innerconnect_frequency(
             continue
         var aik = load(a, b + i * n + pk)
         var ail = load(a, b + i * n + pl)
-        var qpk = mul(add(mul(ail, alk), mul(allv, aik)), inv_det)
-        var qpl = mul(add(mul(aik, akl), mul(akk, ail)), inv_det)
+        var qpk = add(mul(aik, c00), mul(ail, c01))
+        var qpl = add(mul(aik, c10), mul(ail, c11))
         innerconnect_segment(
             a, dst, b, ob, n, m, i, oi, 0, 0, lo, pk, pl, qpk, qpl,
         )
@@ -126,6 +132,17 @@ def innerconnect_frequency(
             pk, pl, qpk, qpl,
         )
         oi += 1
+    return True
+
+
+@always_inline
+def innerconnect_range(
+    a: Ptr, dst: Ptr, start: Int, end: Int, n: Int, pk: Int, pl: Int,
+) -> Bool:
+    for f in range(start, end):
+        if not innerconnect_frequency(a, dst, f, n, pk, pl):
+            return False
+    return True
 
 
 def csqrt(a: C) -> C:
@@ -463,26 +480,6 @@ def msrf_innerconnect(a_addr: Int, dst_addr: Int, nf: Int, n: Int,
                       pk: Int, pl: Int) abi("C") -> Int:
     var a = Ptr(unsafe_from_address=a_addr)
     var dst = Ptr(unsafe_from_address=dst_addr)
-    for f in range(nf):
-        var b = f * n * n
-        var akl = sub(C(1.0, 0.0), load(a, b + pk * n + pl))
-        var alk = sub(C(1.0, 0.0), load(a, b + pl * n + pk))
-        var akk = load(a, b + pk * n + pk)
-        var allv = load(a, b + pl * n + pl)
-        var det = sub(mul(akl, alk), mul(akk, allv))
-        if abs2(det) < 1e-24:
-            return 0
-    if nf >= 131072:
-        def work(task: Int) {
-            imm a, imm dst, imm nf, imm n, imm pk, imm pl
-        }:
-            var start = task * nf // 2
-            var end = (task + 1) * nf // 2
-            for f in range(start, end):
-                innerconnect_frequency(a, dst, f, n, pk, pl)
-        initialize_runtime()
-        parallelize(work, 2, 2)
-    else:
-        for f in range(nf):
-            innerconnect_frequency(a, dst, f, n, pk, pl)
+    if not innerconnect_range(a, dst, 0, nf, n, pk, pl):
+        return 0
     return 1

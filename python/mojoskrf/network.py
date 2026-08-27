@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import warnings
 
 import numpy as np
@@ -11,6 +12,15 @@ from ._lib import addr, c128, lib
 S_DEFINITIONS = ("power", "pseudo", "traveling")
 S_DEF_DEFAULT = "power"
 ZERO = 1e-4
+INNERCONNECT_PARALLEL_THRESHOLD = 16_384
+_innerconnect_executor: ThreadPoolExecutor | None = None
+
+
+def _get_innerconnect_executor() -> ThreadPoolExecutor:
+    global _innerconnect_executor
+    if _innerconnect_executor is None:
+        _innerconnect_executor = ThreadPoolExecutor(max_workers=4)
+    return _innerconnect_executor
 
 
 def fix_z0_shape(z0, nfreqs: int, nports: int) -> np.ndarray:
@@ -236,7 +246,28 @@ def innerconnect_s(a: np.ndarray, k: int, l: int) -> np.ndarray:
     result = np.empty((nf, n - 2, n - 2), dtype=np.complex128)
     if nf == 0 or result.size == 0:
         return result
-    ok = lib().msrf_innerconnect(addr(a), addr(result), nf, n, k, l)
+    native = lib().msrf_innerconnect
+    if nf >= INNERCONNECT_PARALLEL_THRESHOLD:
+        executor = _get_innerconnect_executor()
+        futures = []
+        for worker in range(4):
+            start = worker * nf // 4
+            end = (worker + 1) * nf // 4
+            futures.append(
+                executor.submit(
+                    native,
+                    addr(a[start:end]),
+                    addr(result[start:end]),
+                    end - start,
+                    n,
+                    k,
+                    l,
+                )
+            )
+        statuses = [future.result() for future in futures]
+        ok = all(statuses)
+    else:
+        ok = native(addr(a), addr(result), nf, n, k, l)
     if not ok:
         warnings.warn(
             "Singular matrix detected, using numpy.linalg.lstsq instead.",
