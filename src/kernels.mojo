@@ -5,8 +5,9 @@ buffer, including scratch space.
 """
 
 from std.math import sqrt
-from std.algorithm import parallelize
+from std.runtime import initialize_runtime
 from std.sys.info import simd_width_of as simdwidthof
+from max.algorithm import parallelize
 
 comptime Ptr = UnsafePointer[Float64, AnyOrigin[mut=True]]
 
@@ -472,13 +473,15 @@ def msrf_innerconnect(a_addr: Int, dst_addr: Int, nf: Int, n: Int,
         if abs2(det) < 1e-24:
             return 0
     if nf >= 131072:
-        @parameter
-        def work(task: Int):
+        def work(task: Int) {
+            imm a, imm dst, imm nf, imm n, imm pk, imm pl
+        }:
             var start = task * nf // 2
             var end = (task + 1) * nf // 2
             for f in range(start, end):
                 innerconnect_frequency(a, dst, f, n, pk, pl)
-        parallelize[work](2, 2)
+        initialize_runtime()
+        parallelize(work, 2, 2)
     else:
         for f in range(nf):
             innerconnect_frequency(a, dst, f, n, pk, pl)
